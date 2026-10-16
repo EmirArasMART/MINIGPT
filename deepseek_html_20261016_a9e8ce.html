@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MiniGPT · Öğrenebilen AI</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #212121; color: #ececec; height: 100vh; display: flex; overflow: hidden;
+}
+.sidebar {
+  width: 270px; background: #171717; padding: 16px;
+  border-right: 1px solid #2f2f2f; display: flex; flex-direction: column;
+  gap: 10px; overflow-y: auto;
+}
+.sidebar h2 { font-size: 12px; color: #8e8e8e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+.stat { background: #212121; padding: 10px 12px; border-radius: 8px; font-size: 13px; color: #b4b4b4; }
+.stat b { color: #10a37f; display: block; font-size: 20px; margin-top: 4px; font-weight: 700; }
+.tips { font-size: 12px; color: #8e8e8e; line-height: 1.7; margin-top: 8px; padding: 10px; background: #212121; border-radius: 8px; }
+.tips code { background: #000; padding: 2px 5px; border-radius: 3px; font-size: 11px; color: #10a37f; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.header {
+  padding: 14px 20px; border-bottom: 1px solid #2f2f2f; font-weight: 600;
+  display: flex; align-items: center; gap: 10px; font-size: 15px;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #10a37f; box-shadow: 0 0 10px #10a37f; }
+.badge { background: #10a37f22; color: #10a37f; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.chat { flex: 1; overflow-y: auto; padding: 24px 0; }
+.msg {
+  max-width: 800px; margin: 0 auto; padding: 14px 24px; width: 100%;
+  display: flex; gap: 16px; animation: fadeIn 0.25s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.avatar {
+  width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center;
+  justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0;
+}
+.user .avatar { background: #5d5d5d; color: #fff; }
+.ai .avatar { background: #10a37f; color: #fff; }
+.bubble { white-space: pre-wrap; line-height: 1.65; font-size: 15px; color: #ececec; padding-top: 5px; }
+.input-area { padding: 16px 24px 20px; border-top: 1px solid #2f2f2f; background: #212121; }
+.input-wrap {
+  max-width: 800px; margin: 0 auto; background: #2f2f2f; border-radius: 14px;
+  display: flex; align-items: flex-end; padding: 10px 12px; gap: 8px;
+  border: 1px solid #3a3a3a; transition: border-color 0.2s;
+}
+.input-wrap:focus-within { border-color: #10a37f; }
+textarea {
+  flex: 1; background: transparent; border: none; outline: none; color: #ececec;
+  font-family: inherit; font-size: 15px; resize: none; max-height: 200px; padding: 6px; line-height: 1.4;
+}
+button#send {
+  background: #10a37f; color: #fff; border: none; border-radius: 10px;
+  padding: 9px 16px; cursor: pointer; font-weight: 600; font-size: 14px;
+  transition: background 0.15s;
+}
+button#send:hover:not(:disabled) { background: #0d8a6a; }
+button#send:disabled { background: #444; cursor: not-allowed; }
+.hint { font-size: 12px; color: #8e8e8e; margin-top: 8px; text-align: center; }
+.typing::after { content: '▊'; animation: blink 1s steps(2) infinite; color: #10a37f; }
+@keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h2>Model Bilgisi</h2>
+  <div class="stat">Parametre Sayısı<b id="params">-</b></div>
+  <div class="stat">Bellek Kayıtları<b id="memcount">0</b></div>
+  <div class="stat">Eğitim Adımı<b id="steps">0</b></div>
+  <div class="stat">Son Kayıp (Loss)<b id="loss">-</b></div>
+  <div class="stat">Kelime Dağarcığı<b id="vocab">0</b></div>
+  <div class="tips">
+    💡 <b>Öğretmek için:</b><br>
+    <code>/öğret soru | cevap</code><br><br>
+    🔍 <b>Aramak için:</b><br>
+    Soru işaretiyle sor veya<br>
+    <code>/ara kelime</code>
+  </div>
+</div>
+<div class="main">
+  <div class="header"><span class="dot"></span> MiniGPT · 10K <span class="badge">ÖĞRENİR + WEB</span></div>
+  <div class="chat" id="chat"></div>
+  <div class="input-area">
+    <div class="input-wrap">
+      <textarea id="inp" rows="1" placeholder="Bir şey sor veya /öğret soru | cevap yaz..."></textarea>
+      <button id="send">Gönder</button>
+    </div>
+    <div class="hint">Enter: gönder · Shift+Enter: yeni satır</div>
+  </div>
+</div>
+<script>
+'use strict';
+
+/* ============================================================
+   SİNİR AĞI — Toplam ~10.096 parametre
+   Katmanlar: 80 → 56 → 40 → 80
+   ============================================================ */
+const INPUT_SIZE = 80, HIDDEN1 = 56, HIDDEN2 = 40, OUTPUT_SIZE = 80;
+const TOTAL_PARAMS = INPUT_SIZE*HIDDEN1 + HIDDEN1 + HIDDEN1*HIDDEN2 + HIDDEN2 + HIDDEN2*OUTPUT_SIZE + OUTPUT_SIZE;
+
+function randMatrix(rows, cols) {
+  const m = new Float32Array(rows*cols);
+  const scale = Math.sqrt(2/rows);
+  for (let i=0;i<m.length;i++) m[i] = (Math.random()*2-1)*scale;
+  return m;
+}
+const W1 = randMatrix(INPUT_SIZE, HIDDEN1), b1 = new Float32Array(HIDDEN1);
+const W2 = randMatrix(HIDDEN1, HIDDEN2),   b2 = new Float32Array(HIDDEN2);
+const W3 = randMatrix(HIDDEN2, OUTPUT_SIZE), b3 = new Float32Array(OUTPUT_SIZE);
+
+function forward(x) {
+  const h1 = new Float32Array(HIDDEN1);
+  for (let j=0;j<HIDDEN1;j++) {
+    let s = b1[j];
+    for (let i=0;i<INPUT_SIZE;i++) s += x[i]*W1[i*HIDDEN1+j];
+    h1[j] = s > 0 ? s : 0;
+  }
+  const h2 = new Float32Array(HIDDEN2);
+  for (let j=0;j<HIDDEN2;j++) {
+    let s = b2[j];
+    for (let i=0;i<HIDDEN1;i++) s += h1[i]*W2[i*HIDDEN2+j];
+    h2[j] = s > 0 ? s : 0;
+  }
+  const out = new Float32Array(OUTPUT_SIZE);
+  for (let j=0;j<OUTPUT_SIZE;j++) {
+    let s = b3[j];
+    for (let i=0;i<HIDDEN2;i++) s += h2[i]*W3[i*OUTPUT_SIZE+j];
+    out[j] = 1/(1+Math.exp(-s));
+  }
+  return {h1, h2, out};
+}
+
+function trainStep(x, y, lr) {
+  const {h1, h2, out} = forward(x);
+  const dOut = new Float32Array(OUTPUT_SIZE);
+  let loss = 0;
+  for (let j=0;j<OUTPUT_SIZE;j++) {
+    const d = out[j]-y[j];
+    loss += d*d;
+    dOut[j] = d * out[j]*(1-out[j]);
+  }
+  for (let i=0;i<HIDDEN2;i++) {
+    const base = i*OUTPUT_SIZE, hi = h2[i];
+    for (let j=0;j<OUTPUT_SIZE;j++) W3[base+j] -= lr*dOut[j]*hi;
+  }
+  for (let j=0;j<OUTPUT_SIZE;j++) b3[j] -= lr*dOut[j];
+  const dH2 = new Float32Array(HIDDEN2);
+  for (let i=0;i<HIDDEN2;i++) {
+    let s = 0; const base = i*OUTPUT_SIZE;
+    for (let j=0;j<OUTPUT_SIZE;j++) s += dOut[j]*W3[base+j];
+    dH2[i] = h2[i] > 0 ? s : 0;
+  }
+  for (let i=0;i<HIDDEN1;i++) {
+    const base = i*HIDDEN2, hi = h1[i];
+    for (let j=0;j<HIDDEN2;j++) W2[base+j] -= lr*dH2[j]*hi;
+  }
+  for (let j=0;j<HIDDEN2;j++) b2[j] -= lr*dH2[j];
+  const dH1 = new Float32Array(HIDDEN1);
+  for (let i=0;i<HIDDEN1;i++) {
+    let s = 0; const base = i*HIDDEN2;
+    for (let j=0;j<HIDDEN2;j++) s += dH2[j]*W2[base+j];
+    dH1[i] = h1[i] > 0 ? s : 0;
+  }
+  for (let i=0;i<INPUT_SIZE;i++) {
+    const xi = x[i]; if (xi === 0) continue;
+    const base = i*HIDDEN1;
+    for (let j=0;j<HIDDEN1;j++) W1[base+j] -= lr*dH1[j]*xi;
+  }
+  for (let j=0;j<HIDDEN1;j++) b1[j] -= lr*dH1[j];
+  return loss;
+}
+
+/* ============================================================
+   TOKENIZER & EMBEDDING (hash-based bag-of-words)
+   ============================================================ */
+function tokenize(text) {
+  return text.toLowerCase()
+    .replace(/[^\wçğıöşüâîû\s]/g, ' ')
+    .split(/\s+/).filter(w => w.length > 0);
+}
+function hashWord(w, size) {
+  let h = 2166136261;
+  for (let i=0;i<w.length;i++) {
+    h ^= w.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) % size;
+}
+function normalize(v) {
+  let n = 0; for (const x of v) n += x*x;
+  n = Math.sqrt(n);
+  if (n > 0) for (let i=0;i<v.length;i++) v[i] /= n;
+  return v;
+}
+function embed(text, size) {
+  const v = new Float32Array(size);
+  for (const t of tokenize(text)) v[hashWord(t, size)] += 1;
+  return normalize(v);
+}
+
+/* Çıkış sözlüğü (decoding için) */
+const outputVocab = new Array(OUTPUT_SIZE).fill(null);
+const outputVocabIdx = new Map();
+
+function embedOutput(text) {
+  const v = new Float32Array(OUTPUT_SIZE);
+  for (const t of tokenize(text)) {
+    let idx = outputVocabIdx.get(t);
+    if (idx === undefined) {
+      idx = hashWord(t, OUTPUT_SIZE);
+      let probe = 0;
+      while (outputVocab[idx] !== null && probe < OUTPUT_SIZE) {
+        idx = (idx + 1) % OUTPUT_SIZE; probe++;
+      }
+      if (outputVocab[idx] === null) {
+        outputVocab[idx] = t;
+        outputVocabIdx.set(t, idx);
+      } else { idx = -1; }
+    }
+    if (idx >= 0) v[idx] += 1;
+  }
+  return normalize(v);
+}
+
+function decodeOutput(vec, maxWords) {
+  maxWords = maxWords || 14;
+  const idxs = [];
+  for (let i=0;i<OUTPUT_SIZE;i++) idxs.push([i, vec[i]]);
+  idxs.sort((a,b)=>b[1]-a[1]);
+  const words = [];
+  for (const [i, v] of idxs) {
+    if (words.length >= maxWords) break;
+    if (v < 0.45) break;
+    if (outputVocab[i]) words.push(outputVocab[i]);
+  }
+  return words;
+}
+
+/* ============================================================
+   BELLEK (öğrenilen Q→A çiftleri)
+   ============================================================ */
+const memory = [];
+function addMemory(q, a) {
+  memory.push({ q, a, qVec: embed(q, INPUT_SIZE) });
+}
+function findMemory(q, threshold) {
+  threshold = threshold || 0.62;
+  const qVec = embed(q, INPUT_SIZE);
+  let best = null, bestSim = 0;
+  for (const m of memory) {
+    let dot = 0;
+    for (let i=0;i<INPUT_SIZE;i++) dot += qVec[i]*m.qVec[i];
+    if (dot > bestSim) { bestSim = dot; best = m; }
+  }
+  return bestSim >= threshold ? { mem: best, sim: bestSim } : null;
+}
+
+/* ============================================================
+   WEB ARAMA — Wikipedia API (CORS destekli)
+   ============================================================ */
+async function searchWeb(query) {
+  try {
+    const url = 'https://tr.wikipedia.org/w/api.php?action=query&format=json&origin=*'
+      + '&prop=extracts&exintro=1&explaintext=1&redirects=1'
+      + '&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=1';
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.query || !data.query.pages) return null;
+    const pages = Object.values(data.query.pages);
+    if (!pages.length) return null;
+    const p = pages[0];
+    if (!p.extract) return null;
+    let text = p.extract.replace(/\s+/g, ' ').trim();
+    const sentences = text.split(/(?<=[.!?])\s+/).slice(0, 3).join(' ');
+    text = sentences.length > 700 ? sentences.slice(0, 700) + '…' : sentences;
+    return { title: p.title, text };
+  } catch (e) {
+    console.warn('Arama hatası:', e);
+    return null;
+  }
+}
+
+/* ============================================================
+   ÖĞRENME & YANIT ÜRETME
+   ============================================================ */
+let trainingSteps = 0, lastLoss = '—';
+
+function learnFrom(q, a, epochs) {
+  epochs = epochs || 6;
+  addMemory(q, a);
+  const x = embed(q, INPUT_SIZE);
+  const y = embedOutput(a);
+  for (let i=0;i<epochs;i++) {
+    lastLoss = trainStep(x, y, 0.04).toFixed(4);
+    trainingSteps++;
+  }
+  updateStats();
+}
+
+async function generateResponse(userText) {
+  // 1) Bellekten güçlü eşleşme
+  const found = findMemory(userText, 0.75);
+  if (found) return found.mem.a;
+
+  // 2) Web'de ara
+  const webResult = await searchWeb(userText);
+  if (webResult && webResult.text && webResult.text.length > 20) {
+    const answer = '📚 ' + webResult.title + ' — ' + webResult.text;
+    learnFrom(userText, webResult.text, 4);
+    return answer;
+  }
+
+  // 3) Nöral ağ ile üret
+  const x = embed(userText, INPUT_SIZE);
+  const { out } = forward(x);
+  const words = decodeOutput(out);
+  if (words.length >= 3) return words.join(' ');
+
+  // 4) Zayıf bellek eşleşmesi
+  const weak = findMemory(userText, 0.4);
+  if (weak) return weak.mem.a;
+
+  return 'Bunu henüz bilmiyorum. Bana şöyle öğretebilirsin:\n/öğret soru | cevap';
+}
+
+/* ============================================================
+   İSTATİSTİKLER
+   ============================================================ */
+function updateStats() {
+  document.getElementById('params').textContent = TOTAL_PARAMS.toLocaleString('tr-TR');
+  document.getElementById('memcount').textContent = memory.length;
+  document.getElementById('steps').textContent = trainingSteps;
+  document.getElementById('loss').textContent = lastLoss;
+  let vc = 0; for (const v of outputVocab) if (v) vc++;
+  document.getElementById('vocab').textContent = vc;
+}
+
+/* ============================================================
+   ARAYÜZ
+   ============================================================ */
+const chatEl = document.getElementById('chat');
+const inp = document.getElementById('inp');
+const sendBtn = document.getElementById('send');
+
+function addMsg(role, text) {
+  const msg = document.createElement('div');
+  msg.className = 'msg ' + role;
+  const av = document.createElement('div');
+  av.className = 'avatar';
+  av.textContent = role === 'user' ? 'S' : 'AI';
+  const bub = document.createElement('div');
+  bub.className = 'bubble';
+  bub.textContent = text;
+  msg.appendChild(av); msg.appendChild(bub);
+  chatEl.appendChild(msg);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return bub;
+}
+
+function setTyping(el, on) {
+  if (on) { el.classList.add('typing'); }
+  else { el.classList.remove('typing'); }
+}
+
+async function handleSend() {
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = '';
+  inp.style.height = 'auto';
+
+  addMsg('user', text);
+
+  /* Komutlar */
+  if (text.startsWith('/öğret ')) {
+    const body = text.slice(7);
+    const parts = body.split('|').map(s => s.trim());
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      learnFrom(parts[0], parts[1], 10);
+      addMsg('ai', '✅ Öğrendim!\n📥 Soru: "' + parts[0] + '"\n📤 Cevap: "' + parts[1] + '"');
+    } else {
+      addMsg('ai', '❌ Kullanım: /öğret soru | cevap');
+    }
+    return;
+  }
+
+  if (text.startsWith('/ara ')) {
+    const q = text.slice(5).trim();
+    if (!q) { addMsg('ai', '❌ Kullanım: /ara kelime'); return; }
+    const bubble = addMsg('ai', '🔍 Aranıyor…');
+    setTyping(bubble, true);
+    const res = await searchWeb(q);
+    setTyping(bubble, false);
+    if (res && res.text) {
+      bubble.textContent = '📚 ' + res.title + '\n\n' + res.text;
+      learnFrom(q, res.text, 4);
+    } else {
+      bubble.textContent = 'Sonuç bulunamadı.';
+    }
+    return;
+  }
+
+  /* Normal mesaj */
+  sendBtn.disabled = true;
+  const bubble = addMsg('ai', '');
+  setTyping(bubble, true);
+
+  try {
+    await new Promise(r => setTimeout(r, 250));
+    const response = await generateResponse(text);
+    setTyping(bubble, false);
+    bubble.textContent = response;
+  } catch (e) {
+    setTyping(bubble, false);
+    bubble.textContent = '⚠️ Bir hata oluştu: ' + e.message;
+  } finally {
+    sendBtn.disabled = false;
+    inp.focus();
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+}
+
+sendBtn.addEventListener('click', handleSend);
+inp.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+});
+inp.addEventListener('input', () => {
+  inp.style.height = 'auto';
+  inp.style.height = Math.min(inp.scrollHeight, 200) + 'px';
+});
+
+/* ============================================================
+   BAŞLANGIÇ
+   ============================================================ */
+function init() {
+  updateStats();
+  addMsg('ai',
+    'Merhaba! Ben MiniGPT-10K 👋\n' +
+    'Yaklaşık ' + TOTAL_PARAMS.toLocaleString('tr-TR') + ' parametreli, tarayıcında çalışan küçük bir yapay zekayım.\n\n' +
+    '• Herhangi bir şey sor → Wikipedia\'dan öğrenirim\n' +
+    '• /öğret soru | cevap → bana kalıcı bilgi öğretirsin\n' +
+    '• /ara kelime → doğrudan web araması\n\n' +
+    'Soru sorduğunda hem web\'den araştırır hem de öğrendiği cevabı bir daha ki sefere hatırlarım. 🧠'
+  );
+
+  // Başlangıç bilgileri
+  const seeds = [
+    ['merhaba', 'Merhaba! Sana nasıl yardımcı olabilirim?'],
+    ['nasılsın', 'İyiyim, teşekkür ederim! Sen nasılsın?'],
+    ['adın ne', 'Benim adım MiniGPT-10K. Tarayıcında çalışan küçük ama öğrenen bir yapay zekayım.'],
+    ['teşekkürler', 'Rica ederim! Başka bir şey sormak ister misin?'],
+    ['görüşürüz', 'Görüşmek üzere! İyi günler. 👋'],
+    ['seni kim yaptı', 'JavaScript ile tek bir HTML dosyası içinde yazıldım. Hiçbir kütüphane kullanmıyorum!'],
+    ['ne yapabilirsin', 'Soru sorabilir, web\'den bilgi araştırabilir ve bana öğrettiğin şeyleri hatırlayabilirim.']
+  ];
+  for (const [q,a] of seeds) learnFrom(q, a, 8);
+  inp.focus();
+}
+
+init();
+</script>
+</body>
+</html>
